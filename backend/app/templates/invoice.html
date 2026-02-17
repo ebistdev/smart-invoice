@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Invoice {{ invoice.invoice_number }}</title>
+</head>
+<body>
+    <div class="invoice-header">
+        <div class="business-info">
+            <div class="business-name">{{ user.business_name or 'My Business' }}</div>
+            {% if user.business_address %}
+            <div>{{ user.business_address }}</div>
+            {% endif %}
+            {% if user.business_phone %}
+            <div>{{ user.business_phone }}</div>
+            {% endif %}
+            {% if user.business_email %}
+            <div>{{ user.business_email }}</div>
+            {% endif %}
+        </div>
+        <div class="invoice-title">
+            <h1>INVOICE</h1>
+            <div class="invoice-number">#{{ invoice.invoice_number }}</div>
+        </div>
+    </div>
+    
+    <div class="invoice-meta">
+        <div class="bill-to">
+            <h3>Bill To</h3>
+            <div class="client-name">
+                {% if invoice.client %}
+                    {{ invoice.client.name }}
+                {% else %}
+                    Customer
+                {% endif %}
+            </div>
+            {% if invoice.client and invoice.client.address %}
+            <div>{{ invoice.client.address }}</div>
+            {% endif %}
+            {% if invoice.client and invoice.client.email %}
+            <div>{{ invoice.client.email }}</div>
+            {% endif %}
+        </div>
+        <div class="invoice-dates">
+            <h3>Details</h3>
+            <div class="date-row">
+                <span class="date-label">Invoice Date:</span>
+                {{ invoice.invoice_date|date }}
+            </div>
+            {% if invoice.work_date %}
+            <div class="date-row">
+                <span class="date-label">Work Date:</span>
+                {{ invoice.work_date|date }}
+            </div>
+            {% endif %}
+            {% if invoice.due_date %}
+            <div class="date-row">
+                <span class="date-label">Due Date:</span>
+                {{ invoice.due_date|date }}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <table>
+        <thead>
+            <tr>
+                <th>Description</th>
+                <th class="right">Qty</th>
+                <th>Unit</th>
+                <th class="right">Rate</th>
+                <th class="right">Amount</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in line_items %}
+            <tr>
+                <td>{{ item.description }}</td>
+                <td class="right">{{ item.quantity }}</td>
+                <td>{{ item.unit }}</td>
+                <td class="right">{{ item.unit_price|currency }}</td>
+                <td class="right">{{ item.line_total|currency }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    
+    <div class="totals">
+        <div class="totals-row">
+            <span>Subtotal</span>
+            <span>{{ invoice.subtotal|currency }}</span>
+        </div>
+        {% if invoice.tax_amount and invoice.tax_amount > 0 %}
+        <div class="totals-row">
+            <span>{{ user.tax_name or 'Tax' }}</span>
+            <span>{{ invoice.tax_amount|currency }}</span>
+        </div>
+        {% endif %}
+        {% if has_secondary_tax and invoice.secondary_tax_amount and invoice.secondary_tax_amount > 0 %}
+        <div class="totals-row">
+            <span>{{ user.secondary_tax_name or 'Tax 2' }}</span>
+            <span>{{ invoice.secondary_tax_amount|currency }}</span>
+        </div>
+        {% endif %}
+        <div class="totals-row total">
+            <span>Total Due</span>
+            <span>{{ invoice.total|currency }}</span>
+        </div>
+    </div>
+    
+    {% if invoice.notes %}
+    <div class="notes">
+        <h4>Notes</h4>
+        <p>{{ invoice.notes }}</p>
+    </div>
+    {% endif %}
+    
+    <div class="footer">
+        <p>Thank you for your business!</p>
+    </div>
+</body>
+</html>

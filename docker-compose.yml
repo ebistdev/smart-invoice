@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: smartinvoice-postgres
+    environment:
+      POSTGRES_USER: smartinvoice
+      POSTGRES_PASSWORD: smartinvoice_dev
+      POSTGRES_DB: smartinvoice
+    ports:
+      - "5433:5432"  # Different port to not conflict with other projects
+    volumes:
+      - smartinvoice_postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  smartinvoice_postgres_data:
