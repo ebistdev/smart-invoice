@@ -693,3 +693,174 @@ async def get_client_stats(client_id: UUID, db: AsyncSession = Depends(get_db)):
         "total_paid": total_paid,
         "outstanding": total_invoiced - total_paid
     }
+
+
+# ============ Dashboard Analytics ============
+
+@router.get("/dashboard")
+async def get_dashboard(
+    days: int = 30,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get dashboard analytics.
+    
+    Returns:
+    - Revenue for period
+    - Outstanding amount
+    - Invoice status breakdown
+    - Top clients
+    - Revenue chart data
+    """
+    from app.services.analytics import (
+        get_dashboard_stats,
+        get_revenue_chart,
+        get_top_clients,
+        get_overdue_invoices
+    )
+    
+    user = await get_or_create_demo_user(db)
+    
+    stats = await get_dashboard_stats(db, user.id, days)
+    chart = await get_revenue_chart(db, user.id, months=6)
+    top_clients = await get_top_clients(db, user.id, limit=5)
+    overdue = await get_overdue_invoices(db, user.id)
+    
+    return {
+        **stats,
+        "revenue_chart": chart,
+        "top_clients": top_clients,
+        "overdue_invoices": overdue
+    }
+
+
+# ============ QR Code Payments ============
+
+@router.get("/invoices/{invoice_id}/qr")
+async def get_invoice_qr(
+    invoice_id: UUID,
+    qr_type: str = "invoice",  # invoice, payment, etransfer
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Generate QR code for invoice.
+    
+    Types:
+    - invoice: Invoice details for scanning
+    - payment: Payment link (if configured)
+    - etransfer: Interac e-Transfer details
+    
+    Returns base64-encoded PNG image.
+    """
+    from app.services.qr_payment import (
+        generate_invoice_qr,
+        generate_payment_qr,
+        generate_payment_link_qr
+    )
+    
+    user = await get_or_create_demo_user(db)
+    
+    result = await db.execute(
+        select(Invoice)
+        .where(Invoice.id == invoice_id, Invoice.user_id == user.id)
+    )
+    invoice = result.scalar_one_or_none()
+    
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    
+    try:
+        if qr_type == "invoice":
+            qr_data = generate_invoice_qr(
+                invoice_number=invoice.invoice_number,
+                total=invoice.total,
+                due_date=invoice.due_date.strftime("%Y-%m-%d") if invoice.due_date else "N/A",
+                business_name=user.business_name or "Business"
+            )
+        elif qr_type == "etransfer":
+            if not user.business_email:
+                raise HTTPException(status_code=400, detail="Business email required for e-Transfer QR")
+            qr_data = generate_payment_qr(
+                amount=invoice.total - (invoice.amount_paid or Decimal("0")),
+                recipient_email=user.business_email,
+                invoice_number=invoice.invoice_number,
+                message=f"Payment for Invoice {invoice.invoice_number}"
+            )
+        else:
+            # Default to invoice QR
+            qr_data = generate_invoice_qr(
+                invoice_number=invoice.invoice_number,
+                total=invoice.total,
+                due_date=invoice.due_date.strftime("%Y-%m-%d") if invoice.due_date else "N/A",
+                business_name=user.business_name or "Business"
+            )
+        
+        return {
+            "qr_type": qr_type,
+            "invoice_number": invoice.invoice_number,
+            "image_base64": qr_data,
+            "image_data_url": f"data:image/png;base64,{qr_data}"
+        }
+    except ImportError:
+        raise HTTPException(status_code=501, detail="QR code generation requires: pip install qrcode[pil]")
+
+
+# ============ Recurring Invoices ============
+
+@router.post("/recurring")
+async def create_recurring_invoice(
+    client_id: UUID,
+    frequency: str,  # weekly, biweekly, monthly, quarterly, yearly
+    line_items: list[dict],  # [{"rate_item_id": "uuid", "quantity": 1.0, "description": "optional"}]
+    start_date: Optional[str] = None,
+    notes: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Create a recurring invoice schedule.
+    
+    Invoices will be auto-generated on the specified frequency.
+    Prices always come from your rate card at generation time.
+    """
+    from app.services.recurring import create_recurring_invoice as create_schedule, RecurrenceFrequency
+    from datetime import datetime
+    
+    user = await get_or_create_demo_user(db)
+    
+    # Validate frequency
+    try:
+        freq = RecurrenceFrequency(frequency)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid frequency. Use: weekly, biweekly, monthly, quarterly, yearly")
+    
+    # Validate client exists
+    result = await db.execute(
+        select(Client).where(Client.id == client_id, Client.user_id == user.id)
+    )
+    client = result.scalar_one_or_none()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Parse start date
+    start = None
+    if start_date:
+        try:
+            start = datetime.fromisoformat(start_date)
+        except:
+            start = datetime.now()
+    
+    schedule = await create_schedule(
+        db=db,
+        user_id=user.id,
+        client_id=client_id,
+        line_items=line_items,
+        frequency=freq,
+        start_date=start,
+        notes=notes
+    )
+    
+    return {
+        "success": True,
+        "schedule": schedule,
+        "message": f"Recurring invoice created. Next invoice: {schedule['next_invoice_date']}"
+    }

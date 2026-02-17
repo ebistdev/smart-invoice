@@ -12,6 +12,9 @@
             <span class="font-bold text-xl text-blue-600">Smart Invoice</span>
           </a>
           <div class="ml-10 flex space-x-4">
+            <a href="/dashboard" class="text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium">
+              📊 Dashboard
+            </a>
             <a href="/" class="text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium">
               New Invoice
             </a>

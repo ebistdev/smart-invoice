@@ -14,3 +14,4 @@ openai==1.55.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 alembic==1.14.0
+qrcode[pil]==8.0
