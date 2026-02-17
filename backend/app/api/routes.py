@@ -433,3 +433,263 @@ async def update_settings(
     await db.commit()
     await db.refresh(user)
     return BusinessSettingsResponse.model_validate(user)
+
+
+# ============ Voice Input ============
+
+@router.post("/voice/transcribe")
+async def transcribe_voice(
+    file: bytes,
+    language: Optional[str] = None
+):
+    """
+    Transcribe voice audio to text for invoice creation.
+    
+    Send audio file (webm, mp3, wav) and get back text that can be
+    used with /invoices/parse.
+    """
+    from app.services.voice_input import transcribe_audio
+    
+    try:
+        text = await transcribe_audio(file, language=language)
+        return {"text": text, "success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+
+
+# ============ Templates ============
+
+@router.get("/templates")
+async def list_templates():
+    """List available invoice templates."""
+    from app.services.pdf_generator import list_templates
+    return list_templates()
+
+
+@router.get("/templates/{template_id}/preview")
+async def preview_template(template_id: str, db: AsyncSession = Depends(get_db)):
+    """Preview a template with sample data."""
+    from app.services.pdf_generator import generate_invoice_pdf, TEMPLATES
+    from datetime import datetime, timedelta
+    
+    if template_id not in TEMPLATES:
+        raise HTTPException(status_code=404, detail="Template not found")
+    
+    user = await get_or_create_demo_user(db)
+    
+    # Create sample invoice for preview
+    class SampleLineItem:
+        description = "Sample Service"
+        quantity = Decimal("2")
+        unit = "hour"
+        unit_price = Decimal("85.00")
+        line_total = Decimal("170.00")
+        sort_order = 0
+    
+    class SampleClient:
+        name = "Sample Client"
+        company = "Sample Company"
+        email = "client@example.com"
+        address = "123 Main St"
+        payment_terms = 30
+    
+    class SampleInvoice:
+        invoice_number = "PREVIEW-001"
+        invoice_date = datetime.now()
+        work_date = datetime.now()
+        due_date = datetime.now() + timedelta(days=30)
+        subtotal = Decimal("170.00")
+        tax_amount = Decimal("8.50")
+        secondary_tax_amount = Decimal("0")
+        total = Decimal("178.50")
+        notes = "This is a preview of the invoice template."
+        client = SampleClient()
+        line_items = [SampleLineItem()]
+        template = template_id
+    
+    pdf_bytes = generate_invoice_pdf(SampleInvoice(), user, template_id)
+    
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="preview-{template_id}.pdf"'}
+    )
+
+
+# ============ Payment Tracking ============
+
+@router.post("/invoices/{invoice_id}/payment")
+async def record_payment(
+    invoice_id: UUID,
+    amount: Decimal,
+    method: str = "cash",
+    reference: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Record a payment against an invoice.
+    
+    Automatically updates status to 'paid' when fully paid.
+    """
+    from datetime import datetime
+    
+    user = await get_or_create_demo_user(db)
+    
+    result = await db.execute(
+        select(Invoice)
+        .where(Invoice.id == invoice_id, Invoice.user_id == user.id)
+        .options(selectinload(Invoice.client))
+    )
+    invoice = result.scalar_one_or_none()
+    
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    
+    # Update payment
+    invoice.amount_paid = (invoice.amount_paid or Decimal("0")) + amount
+    invoice.payment_method = method
+    invoice.payment_reference = reference
+    invoice.paid_at = datetime.now()
+    
+    # Update status
+    if invoice.amount_paid >= invoice.total:
+        invoice.status = "paid"
+    elif invoice.amount_paid > 0:
+        invoice.status = "partial"
+    
+    # Update client stats
+    if invoice.client:
+        invoice.client.total_paid = (invoice.client.total_paid or Decimal("0")) + amount
+    
+    await db.commit()
+    
+    return {
+        "invoice_id": str(invoice_id),
+        "amount_paid": float(invoice.amount_paid),
+        "total": float(invoice.total),
+        "remaining": float(invoice.total - invoice.amount_paid),
+        "status": invoice.status
+    }
+
+
+@router.post("/invoices/{invoice_id}/send")
+async def send_invoice_email(
+    invoice_id: UUID,
+    to_email: Optional[str] = None,
+    message: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Send invoice via email.
+    
+    Uses client email if to_email not provided.
+    """
+    from datetime import datetime
+    from app.services.email_sender import EmailService, EmailConfig
+    from app.config import get_settings
+    
+    settings = get_settings()
+    user = await get_or_create_demo_user(db)
+    
+    result = await db.execute(
+        select(Invoice)
+        .where(Invoice.id == invoice_id, Invoice.user_id == user.id)
+        .options(selectinload(Invoice.line_items), selectinload(Invoice.client))
+    )
+    invoice = result.scalar_one_or_none()
+    
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    
+    # Determine recipient
+    recipient_email = to_email
+    recipient_name = "Customer"
+    
+    if not recipient_email and invoice.client:
+        recipient_email = invoice.client.email
+        recipient_name = invoice.client.name
+    
+    if not recipient_email:
+        raise HTTPException(status_code=400, detail="No email address provided or on file for client")
+    
+    # Check email config
+    if not settings.smtp_user:
+        raise HTTPException(status_code=400, detail="Email not configured. Set SMTP settings in environment.")
+    
+    # Generate PDF
+    pdf_bytes = generate_invoice_pdf(invoice, user)
+    
+    # Send email
+    email_config = EmailConfig(
+        smtp_host=settings.smtp_host,
+        smtp_port=settings.smtp_port,
+        smtp_user=settings.smtp_user,
+        smtp_password=settings.smtp_password,
+        from_email=settings.from_email or settings.smtp_user,
+        from_name=settings.from_name
+    )
+    
+    email_service = EmailService(email_config)
+    
+    success = await email_service.send_invoice(
+        to_email=recipient_email,
+        to_name=recipient_name,
+        invoice_number=invoice.invoice_number,
+        total=f"${invoice.total:,.2f}",
+        pdf_bytes=pdf_bytes,
+        business_name=user.business_name or "My Business",
+        custom_message=message
+    )
+    
+    if success:
+        # Update invoice
+        invoice.status = "sent"
+        invoice.sent_at = datetime.now()
+        invoice.sent_to = recipient_email
+        await db.commit()
+        
+        return {"success": True, "sent_to": recipient_email}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to send email")
+
+
+# ============ Client Stats ============
+
+@router.get("/clients/{client_id}/stats")
+async def get_client_stats(client_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Get stats for a client (total invoiced, paid, outstanding)."""
+    from sqlalchemy import func
+    
+    user = await get_or_create_demo_user(db)
+    
+    # Get client
+    result = await db.execute(
+        select(Client).where(Client.id == client_id, Client.user_id == user.id)
+    )
+    client = result.scalar_one_or_none()
+    
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Get invoice stats
+    result = await db.execute(
+        select(
+            func.count(Invoice.id).label("invoice_count"),
+            func.sum(Invoice.total).label("total_invoiced"),
+            func.sum(Invoice.amount_paid).label("total_paid")
+        )
+        .where(Invoice.client_id == client_id)
+    )
+    stats = result.one()
+    
+    total_invoiced = float(stats.total_invoiced or 0)
+    total_paid = float(stats.total_paid or 0)
+    
+    return {
+        "client_id": str(client_id),
+        "client_name": client.name,
+        "invoice_count": stats.invoice_count or 0,
+        "total_invoiced": total_invoiced,
+        "total_paid": total_paid,
+        "outstanding": total_invoiced - total_paid
+    }

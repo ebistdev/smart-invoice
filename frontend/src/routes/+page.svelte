@@ -7,6 +7,90 @@
   let parsedInvoice: ParseResponse | null = null;
   let createdInvoice: Invoice | null = null;
   
+  // Voice input
+  let isRecording = false;
+  let mediaRecorder: MediaRecorder | null = null;
+  let audioChunks: Blob[] = [];
+  let isTranscribing = false;
+  
+  // Templates
+  interface Template {
+    id: string;
+    name: string;
+    description: string;
+  }
+  let templates: Template[] = [];
+  let selectedTemplate = 'modern';
+  
+  // Load templates on mount
+  import { onMount } from 'svelte';
+  onMount(async () => {
+    try {
+      const response = await fetch('/api/templates');
+      if (response.ok) {
+        templates = await response.json();
+      }
+    } catch (e) {
+      console.error('Failed to load templates');
+    }
+  });
+  
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorder = new MediaRecorder(stream);
+      audioChunks = [];
+      
+      mediaRecorder.ondataavailable = (e) => {
+        audioChunks.push(e.data);
+      };
+      
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        await transcribeAudio(audioBlob);
+        stream.getTracks().forEach(track => track.stop());
+      };
+      
+      mediaRecorder.start();
+      isRecording = true;
+    } catch (e) {
+      error = 'Microphone access denied';
+    }
+  }
+  
+  function stopRecording() {
+    if (mediaRecorder && isRecording) {
+      mediaRecorder.stop();
+      isRecording = false;
+    }
+  }
+  
+  async function transcribeAudio(audioBlob: Blob) {
+    isTranscribing = true;
+    error = '';
+    
+    try {
+      const formData = new FormData();
+      formData.append('file', audioBlob, 'recording.webm');
+      
+      const response = await fetch('/api/voice/transcribe', {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        workDescription = result.text;
+      } else {
+        error = 'Transcription failed. Try typing instead.';
+      }
+    } catch (e) {
+      error = 'Transcription failed';
+    } finally {
+      isTranscribing = false;
+    }
+  }
+  
   async function parseWork() {
     if (!workDescription.trim()) return;
     
@@ -88,17 +172,52 @@
   {:else}
     <!-- Input form -->
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
-      <label for="work" class="block text-sm font-medium text-gray-700 mb-2">
-        Describe your work
-      </label>
+      <div class="flex items-center justify-between mb-4">
+        <label for="work" class="block text-sm font-medium text-gray-700">
+          Describe your work
+        </label>
+        <!-- Voice Input Button -->
+        <button
+          onclick={isRecording ? stopRecording : startRecording}
+          disabled={isTranscribing}
+          class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition {isRecording ? 'bg-red-100 text-red-700 animate-pulse' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}"
+        >
+          {#if isTranscribing}
+            <span class="animate-spin">⏳</span> Transcribing...
+          {:else if isRecording}
+            <span class="text-red-500">●</span> Stop Recording
+          {:else}
+            🎤 Voice Input
+          {/if}
+        </button>
+      </div>
+      
       <textarea
         id="work"
         bind:value={workDescription}
         placeholder="e.g., Bill Johnson Electric for 3 hours troubleshooting, replaced a 30-amp breaker, and 45 minutes travel"
         rows="4"
         class="w-full border border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-        disabled={isLoading}
+        disabled={isLoading || isRecording || isTranscribing}
       ></textarea>
+      
+      <!-- Template Selection -->
+      {#if templates.length > 0}
+        <div class="mt-4">
+          <label class="block text-sm font-medium text-gray-700 mb-2">Invoice Template</label>
+          <div class="flex gap-2 flex-wrap">
+            {#each templates as template}
+              <button
+                onclick={() => selectedTemplate = template.id}
+                class="px-3 py-1.5 rounded-lg text-sm transition {selectedTemplate === template.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}"
+                title={template.description}
+              >
+                {template.name}
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
       
       <div class="mt-4 flex gap-3">
         <button

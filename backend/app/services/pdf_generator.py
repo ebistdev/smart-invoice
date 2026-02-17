@@ -1,10 +1,12 @@
 """
 PDF Invoice Generator using WeasyPrint.
+Supports multiple beautiful templates.
 """
 
 import io
 from datetime import datetime
 from decimal import Decimal
+from typing import Optional
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML, CSS
 from pathlib import Path
@@ -14,9 +16,27 @@ from app.db.models import Invoice, User
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 
+# Available templates
+TEMPLATES = {
+    "modern": "invoice_modern.html",
+    "minimal": "invoice_minimal.html",
+    "classic": "invoice.html",  # Original template
+    "bold": "invoice_modern.html",  # Alias for now
+}
+
 
 def get_template_env():
     return Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)))
+
+
+def list_templates() -> list[dict]:
+    """List available invoice templates."""
+    return [
+        {"id": "modern", "name": "Modern", "description": "Clean, professional design with blue accents"},
+        {"id": "minimal", "name": "Minimal", "description": "Simple, elegant black and white"},
+        {"id": "classic", "name": "Classic", "description": "Traditional invoice layout"},
+        {"id": "bold", "name": "Bold", "description": "Eye-catching design for creative businesses"},
+    ]
 
 
 def format_currency(value: Decimal) -> str:
@@ -31,13 +51,15 @@ def format_date(dt: datetime) -> str:
     return ""
 
 
-def generate_invoice_pdf(invoice: Invoice, user: User) -> bytes:
-    """Generate PDF invoice."""
+def generate_invoice_pdf(invoice: Invoice, user: User, template_id: Optional[str] = None) -> bytes:
+    """Generate PDF invoice with specified template."""
     env = get_template_env()
     env.filters['currency'] = format_currency
     env.filters['date'] = format_date
     
-    template = env.get_template("invoice.html")
+    # Get template
+    template_file = TEMPLATES.get(template_id or invoice.template or "modern", "invoice_modern.html")
+    template = env.get_template(template_file)
     
     # Prepare line items
     line_items = sorted(invoice.line_items, key=lambda x: x.sort_order)

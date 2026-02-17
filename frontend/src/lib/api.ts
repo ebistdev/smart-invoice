@@ -100,9 +100,12 @@ export interface Invoice {
   tax_amount: number;
   secondary_tax_amount?: number;
   total: number;
+  amount_paid?: number;
   notes?: string;
   line_items: InvoiceLineItem[];
   created_at: string;
+  sent_at?: string;
+  template?: string;
 }
 
 export const invoices = {

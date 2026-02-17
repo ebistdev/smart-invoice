@@ -71,7 +71,19 @@ class Client(Base):
     address = Column(Text)
     notes = Column(Text)
     
+    # Additional client info
+    company = Column(String(255))
+    contact_name = Column(String(255))  # If different from company name
+    payment_terms = Column(Integer, default=30)  # Days until due
+    default_rate_multiplier = Column(Numeric(5, 2), default=Decimal("1.00"))  # For special pricing
+    
+    # Stats (computed)
+    total_invoiced = Column(Numeric(12, 2), default=Decimal("0"))
+    total_paid = Column(Numeric(12, 2), default=Decimal("0"))
+    invoice_count = Column(Integer, default=0)
+    
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     user = relationship("User", back_populates="clients")
     invoices = relationship("Invoice", back_populates="client")
@@ -85,10 +97,25 @@ class Invoice(Base):
     client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="SET NULL"))
     
     invoice_number = Column(String(50), nullable=False)
-    status = Column(String(20), default="draft")  # draft, sent, paid, overdue
+    status = Column(String(20), default="draft")  # draft, sent, paid, overdue, cancelled
     
     # Original input (for auditing)
     original_input = Column(Text)
+    
+    # Template
+    template = Column(String(50), default="modern")  # modern, classic, minimal, bold
+    
+    # Payment tracking
+    amount_paid = Column(Numeric(12, 2), default=Decimal("0"))
+    paid_at = Column(DateTime)
+    payment_method = Column(String(50))  # cash, check, etransfer, credit_card, etc.
+    payment_reference = Column(String(255))  # check number, transaction ID, etc.
+    
+    # Email tracking
+    sent_at = Column(DateTime)
+    sent_to = Column(String(255))
+    last_reminder_at = Column(DateTime)
+    reminder_count = Column(Integer, default=0)
     
     # Dates
     work_date = Column(DateTime)
